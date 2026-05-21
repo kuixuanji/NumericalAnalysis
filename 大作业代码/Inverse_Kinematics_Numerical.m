@@ -1,0 +1,41 @@
+function [q, tool] = Inverse_Kinematics_Numerical(T_target, q_init, MDH_params)
+    q = q_init; tool = false;
+
+    % 1.提取目标位置与姿态
+    p_target = T_target(1:3, 4); 
+    R_target = T_target(1:3, 1:3); 
+    q_target_quat = rotMat2Quat(R_target);
+
+    % 2. 提取当前初始初值姿态（用于在循环外进行全局符号对齐）
+    T_init = Forward_Kinematics(q);
+    q_init_quat = rotMat2Quat(T_init(1:3, 1:3));
+    
+    % 防止跨半球符号突变
+    if dot(q_target_quat, q_init_quat) < 0
+        q_target_quat = -q_target_quat;
+    end
+    % 3.牛顿迭代循环
+    for iter = 1:20 
+        T_curr = Forward_Kinematics(q);
+        p_curr = T_curr(1:3, 4); 
+        R_curr = T_curr(1:3, 1:3); 
+        q_curr = rotMat2Quat(R_curr);
+
+        % 计算位置与姿态残差
+        e_pos = p_target - p_curr; 
+        e_ori = Compute_QuatError(q_target_quat, q_curr);
+
+        % 构造加权广义误差向量
+        e = [e_pos; 0.2 * e_ori];
+
+        if norm([e_pos; 0.2*e_ori]) < 1e-5
+            tool = true; return;
+        end
+        % 计算雅可比矩阵
+        J = Compute_Jacobian(q, MDH_params);
+
+        A = J' * J + 0.002 * eye(7);
+        dq = A \ (J' * e);
+        q = q + dq;
+    end
+end
