@@ -1,4 +1,4 @@
-function T = getMDH_Trans(a,alpha,d,theta)
+function T = Get_MDH_Trans(a,alpha,d,theta)
     T = [cos(theta),-sin(theta),0,a;
                sin(theta)*cos(alpha),cos(theta)*cos(alpha),-sin(alpha),-d*sin(alpha);
                sin(theta)*sin(alpha),cos(theta)*sin(alpha),cos(alpha),d*cos(alpha);
