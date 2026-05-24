@@ -1,6 +1,6 @@
 clc; clear; close all;
 config_input = [0.2; -0.4; 0.3; 0.6; -0.2; 0.5; 0.1];
-T_forward = my_getTransform(config_input);
+T_forward = Forward_Kinematics(config_input);
 
 % === 调试：绘制 psi 在 0~2pi 范围内的残差曲线 ===
 psi_test = linspace(0, 2*pi, 360);

@@ -34,9 +34,9 @@ function[res, theta,P_e] = resi(psi, P_w, P_s, MDH_params, theta4_init, n_ref, k
     T_0_5 = eye(4);
     for i = 1:5
         if i == 5
-        T_i = getMDH_Trans(a(i),alpha(i),d(i),0);
+        T_i = Get_MDH_Trans(a(i),alpha(i),d(i),0);
         else
-        T_i = getMDH_Trans(a(i),alpha(i),d(i),theta(i));
+        T_i = Get_MDH_Trans(a(i),alpha(i),d(i),theta(i));
         end
         T_0_5 = T_0_5*T_i;
     end
