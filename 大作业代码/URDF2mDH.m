@@ -80,7 +80,7 @@ for i = 1:7
     r = MDH_Inertial{i}.r_c;
     Steiner = MDH_Inertial{i}.m * ( (r'*r)*eye(3) - (r*r') );
     
-    MDH_Inertial{i}.I_c = Ic_rotated + Steiner;
+    MDH_Inertial{i}.I_c = Ic_rotated;
 end
 save('MDH_Inertial.mat','MDH_Inertial');
 
