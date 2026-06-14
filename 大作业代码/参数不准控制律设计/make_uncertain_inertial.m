@@ -7,6 +7,7 @@ function [inertial_hat, info] = make_uncertain_inertial(inertial_true)
     inertia_scale = [0.78; 1.18; 0.82; 1.22; 0.88; 1.15; 0.80];
 
     inertial_hat = inertial_true;
+    
     for i = 1:7
         inertial_hat{i}.m = inertial_true{i}.m * mass_scale(i);
         inertial_hat{i}.r_c = inertial_true{i}.r_c(:) * com_scale(i);

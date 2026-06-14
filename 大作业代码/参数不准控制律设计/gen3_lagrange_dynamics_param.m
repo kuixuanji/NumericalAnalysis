@@ -156,7 +156,4 @@ function check_joint_vector(x, name)
     if numel(x) ~= 7
         error('%s 必须包含 7 个关节量。', name);
     end
-    if any(~isfinite(x(:)))
-        error('%s 中包含 NaN 或 Inf。', name);
-    end
 end

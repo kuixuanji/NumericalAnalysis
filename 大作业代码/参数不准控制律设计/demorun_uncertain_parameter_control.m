@@ -1,7 +1,8 @@
-%% 参数不准确情况下的鲁棒轨迹跟踪控制
+%% 参数不准确情况下的鲁棒轨迹跟踪控制：稳定演示版
 % 本脚本复用原大作业中的七自由度机械臂模型和惯性参数。
-% 被控对象使用真实参数进行仿真，控制器前馈项使用扰动后的名义参数。
-% 本模型不计摩擦。
+% 被控对象使用真实参数进行仿真，控制器前馈项故意使用扰动后的
+% 质量、质心和惯性张量参数。本模型不计摩擦。
+% 演示版保留调参过程中验证有效的稳定措施，用于展示参数不准时的轨迹跟踪效果。
 clear; clc; close all;
 
 this_dir = fileparts(mfilename('fullpath'));
@@ -13,56 +14,88 @@ data = load(fullfile(code_dir, 'MDH_Inertial.mat'), 'MDH_Inertial');
 inertial_true = data.MDH_Inertial;
 [inertial_hat, uncertainty_info] = make_uncertain_inertial(inertial_true);
 
-ctrl.Kp = diag([12.0, 17.25, 10.0, 8.5, 5.5, 3.5, 2.5]);
-ctrl.Kd = diag([3.2, 10.5, 2.6, 2.2, 1.5, 1.0, 0.8]);
-ctrl.Kr = diag([1.0, 0.3, 0.8, 0.8, 0.5, 0.3, 0.2]);
+% 稳定措施说明：演示参数不准情形，因此前馈模型使用扰动后的名义惯性参数。
+test.use_true_feedforward = false;
+
+% 稳定措施说明：降低整体控制增益，避免初始误差通过小惯性方向放大成过大加速度。
+test.gain_scale = 0.10;
+
+% 稳定措施说明：缩小初始位置偏差，避免仿真起步阶段直接撞入大超调。
+test.initial_error_scale = 0.25;
+
+% 稳定措施说明：反馈项软启动，前 0.5 秒逐渐打开 PD 和滑模反馈，减少起步冲击。
+test.feedback_ramp_time = 0.5;
+
+% 稳定措施说明：关节 2 是主要误差来源，单独增强其拉回和阻尼，并降低其滑模抖振。
+test.joint2_kp_scale = 1.5;
+test.joint2_kd_scale = 3.5;
+test.joint2_kr_scale = 0.3;
+
+if test.use_true_feedforward
+    inertial_ctrl = inertial_true;
+else
+    inertial_ctrl = inertial_hat;
+end
+
+ctrl.Kp = test.gain_scale * diag([120, 115, 100, 85, 55, 35, 25]);
+ctrl.Kd = test.gain_scale * diag([32, 30, 26, 22, 15, 10, 8]);
+ctrl.Kr = test.gain_scale * diag([10, 10, 8, 8, 5, 3, 2]);
+ctrl.Kp(2, 2) = test.joint2_kp_scale * ctrl.Kp(2, 2);
+ctrl.Kd(2, 2) = test.joint2_kd_scale * ctrl.Kd(2, 2);
+ctrl.Kr(2, 2) = test.joint2_kr_scale * ctrl.Kr(2, 2);
 ctrl.Lambda = diag([5.0, 5.0, 4.5, 4.5, 3.5, 3.0, 2.5]);
 
-% 加大滑模边界层，减轻 sat(s/phi) 引起的高频抖振。
+% 稳定措施说明：加大滑模边界层，减轻 sat(s/phi) 引起的高频抖振。
 ctrl.phi = 0.2 * ones(7, 1);
 
-% 按 URDF effort 设置力矩限幅，防止控制器输出超过执行器能力。
+% 稳定措施说明：按 URDF effort 设置力矩限幅，防止控制器输出超过执行器能力。
 ctrl.tau_limit = [39; 39; 39; 39; 9; 9; 9];
+ctrl.feedback_ramp_time = test.feedback_ramp_time;
 
-% 反馈项软启动，前 0.5 秒逐渐打开 PD 和滑模反馈，减少起步冲击。
-ctrl.feedback_ramp_time = 0.5;
-
-% 加入关节物理限位，若越界则提前终止仿真并打印原因。
+% 稳定措施说明：加入关节物理限位，演示中若越界会提前终止并打印原因。
 ctrl.q_lower = [-inf; -2.24; -inf; -2.57; -inf; -2.09; -inf];
 ctrl.q_upper = [ inf;  2.24;  inf;  2.57;  inf;  2.09;  inf];
 
-% 给前向动力学求解加入等效电机惯量，抑制 M 的小特征值导致的加速度放大。
+% 稳定措施说明：给前向动力学求解加入等效电机惯量，抑制 M 的小特征值导致的加速度放大。
 ctrl.motor_inertia = 0.05 * ones(7, 1);
 
-% 靠近关节限位时加入软保护力矩，尤其防止关节 2 冲到下限。
+% 稳定措施说明：靠近关节限位时加入软保护力矩，尤其防止关节 2 冲到下限。
 ctrl.q_limit_margin = 0.35;
 ctrl.q_limit_Kp = [0; 30; 0; 15; 0; 8; 0];
 ctrl.q_limit_Kd = [0; 8; 0; 4; 0; 2; 0];
 
-sim.T = 16.0;
+sim.T = 8.0;
 sim.dt = 0.001;
 sim.tspan = 0:sim.dt:sim.T;
 
 [q_ref0, dq_ref0] = desired_joint_trajectory(0);
-
-% 使用调参后的小初始偏差，避免仿真起步阶段直接进入大超调。
-q0 = q_ref0 + [0.0200; -0.0150; 0.0125; -0.0125; 0.0100; -0.0075; 0.0050];
+q0 = q_ref0 + test.initial_error_scale * ...
+    [0.08; -0.06; 0.05; -0.05; 0.04; -0.03; 0.02];
 dq0 = dq_ref0 + zeros(7, 1);
 x0 = [q0; dq0];
 
 fprintf('名义模型使用的参数扰动比例：\n');
 disp(uncertainty_info);
+if test.use_true_feedforward
+    fprintf('演示设置：前馈项使用真实惯性参数，对照参数扰动影响。\n');
+else
+    fprintf('演示设置：前馈项使用扰动后的名义惯性参数。\n');
+end
+fprintf('演示设置：gain_scale=%.3f, initial_error_scale=%.3f, feedback_ramp_time=%.3f s\n', ...
+    test.gain_scale, test.initial_error_scale, test.feedback_ramp_time);
+fprintf('关节2额外调节：Kp x %.3f, Kd x %.3f, Kr x %.3f, phi=%.3f\n', ...
+    test.joint2_kp_scale, test.joint2_kd_scale, test.joint2_kr_scale, ctrl.phi(1));
 fprintf('前向动力学求解加入等效电机惯量：diag(Jm)=%.3f kg*m^2\n', ctrl.motor_inertia(1));
-fprintf('半隐式 Euler 步长：%.4f s\n', sim.dt);
+fprintf('关节限位软保护：margin=%.3f rad\n', ctrl.q_limit_margin);
 
-ode_rhs = @(t, x) closed_loop_rhs(t, x, inertial_true, inertial_hat, ctrl);
-[t, x, stop_info] = semi_implicit_euler_integrate( ...
-    ode_rhs, sim.tspan, x0, inertial_true, inertial_hat, ctrl);
+ode_rhs = @(t, x) closed_loop_rhs(t, x, inertial_true, inertial_ctrl, ctrl);
+[t, x, stop_info] = fixed_step_demo_integrate( ...
+    ode_rhs, sim.tspan, x0, inertial_true, inertial_ctrl, ctrl);
 
 if stop_info.stopped
-    fprintf('\n半隐式 Euler 仿真提前终止：t = %.6f s\n', stop_info.t);
+    fprintf('\n稳定演示版固定步长仿真提前终止：t = %.6f s\n', stop_info.t);
     fprintf('终止原因：%s\n', stop_info.reason);
-    report_runtime_state(stop_info.t, stop_info.x, inertial_true, inertial_hat, ctrl);
+    report_runtime_state(stop_info.t, stop_info.x, inertial_true, inertial_ctrl, ctrl);
 end
 
 n_step = numel(t);
@@ -75,7 +108,6 @@ tau = zeros(n_step, 7);
 tau_ff = zeros(n_step, 7);
 tau_pd = zeros(n_step, 7);
 tau_smc = zeros(n_step, 7);
-tau_guard = zeros(n_step, 7);
 err_norm = zeros(n_step, 1);
 
 for k = 1:n_step
@@ -85,13 +117,12 @@ for k = 1:n_step
     ddq_ref(k, :) = ddqr.';
 
     [tau_raw, parts] = stable_controller(t(k), q(k, :).', dq(k, :).', ...
-        inertial_hat, ctrl);
+        inertial_ctrl, ctrl);
     tau_k = limit_tau(tau_raw, ctrl.tau_limit);
     tau(k, :) = tau_k.';
     tau_ff(k, :) = parts.tau_ff.';
     tau_pd(k, :) = parts.tau_pd.';
     tau_smc(k, :) = parts.tau_smc.';
-    tau_guard(k, :) = parts.tau_limit_guard.';
     err_norm(k) = norm(qr - q(k, :).');
 end
 
@@ -103,8 +134,7 @@ upper_violation = max(max(q - ctrl.q_upper.'));
 joint_limit_violation = max([0, lower_violation, upper_violation]);
 fprintf('最大关节位置限位超出量：%.6f rad\n', joint_limit_violation);
 
-plot_tracking_result(t, q, dq, q_ref, dq_ref, tau, ...
-    tau_ff, tau_pd, tau_smc, tau_guard, err_norm);
+plot_tracking_result(t, q, dq, q_ref, dq_ref, tau, tau_ff, tau_pd, tau_smc, err_norm);
 
 function dx = closed_loop_rhs(t, x, inertial_true, inertial_hat, ctrl)
     q = x(1:7);
@@ -116,7 +146,7 @@ function dx = closed_loop_rhs(t, x, inertial_true, inertial_hat, ctrl)
     [M, C, G] = gen3_lagrange_dynamics_param(q, dq, zeros(7, 1), inertial_true);
     rhs = tau - C * dq - G;
 
-    % 实际求解前向加速度时使用 M+Jm，而不是直接使用原始 M。
+    % 稳定措施说明：实际求解前向加速度时使用 M+Jm，而不是直接使用原始 M。
     M_solve = regularize_mass_matrix(M, ctrl);
     info = compute_runtime_info(t, q, dq, tau, M, rhs, M_solve);
     assert_runtime_ok(info);
@@ -129,7 +159,7 @@ function dx = closed_loop_rhs(t, x, inertial_true, inertial_hat, ctrl)
     dx = [dq; ddq];
 end
 
-function [t_out, x_out, stop_info] = semi_implicit_euler_integrate( ...
+function [t_out, x_out, stop_info] = fixed_step_demo_integrate( ...
         ode_rhs, tspan, x0, inertial_true, inertial_hat, ctrl)
     n_step = numel(tspan);
     x_all = zeros(n_step, numel(x0));
@@ -140,7 +170,7 @@ function [t_out, x_out, stop_info] = semi_implicit_euler_integrate( ...
     stop_info.x = x0(:);
     stop_info.reason = '';
 
-    fprintf('\n开始半隐式 Euler 积分，共 %d 步。\n', n_step - 1);
+    fprintf('\n开始固定步长稳定演示积分，共 %d 步。积分格式：半隐式 Euler。\n', n_step - 1);
     report_runtime_state(tspan(1), x0(:), inertial_true, inertial_hat, ctrl);
 
     for k = 1:n_step - 1
@@ -170,7 +200,7 @@ function [t_out, x_out, stop_info] = semi_implicit_euler_integrate( ...
             return;
         end
 
-        % 使用半隐式 Euler，先更新速度再更新位置，降低显式 Euler 的能量放大。
+        % 稳定措施说明：使用半隐式 Euler，先更新速度再更新位置，降低显式 Euler 的能量放大。
         q_next = xk(1:7) + h * (xk(8:14) + h * dx(8:14));
         dq_next = xk(8:14) + h * dx(8:14);
         x_next = [q_next; dq_next];
@@ -188,7 +218,7 @@ function [t_out, x_out, stop_info] = semi_implicit_euler_integrate( ...
             return;
         end
 
-        if mod(k, 1000) == 0 || k == n_step - 1
+        if mod(k, 500) == 0 || k == n_step - 1
             fprintf('  step %4d/%4d, t = %.3f s\n', k, n_step - 1, t);
             report_runtime_state(t, xk, inertial_true, inertial_hat, ctrl);
         end
@@ -211,7 +241,7 @@ function [is_bad, reason] = is_bad_state(t, x, inertial_true, inertial_hat, ctrl
     q = x(1:7);
     dq = x(8:14);
 
-    % 每一步检查关节限位，避免仿真结果进入物理不可行区域。
+    % 稳定措施说明：每一步检查关节限位，避免演示结果进入物理不可行区域。
     lower_violation = q < ctrl.q_lower;
     upper_violation = q > ctrl.q_upper;
     if any(lower_violation) || any(upper_violation)
@@ -227,8 +257,7 @@ function [is_bad, reason] = is_bad_state(t, x, inertial_true, inertial_hat, ctrl
     tau = limit_tau(tau_raw, ctrl.tau_limit);
     [M, C, G] = gen3_lagrange_dynamics_param(q, dq, zeros(7, 1), inertial_true);
     rhs = tau - C * dq - G;
-
-    % 限位和发散检查也基于 M+Jm 后的实际求解矩阵。
+    % 稳定措施说明：限位和发散检查也基于 M+Jm 后的实际求解矩阵。
     M_solve = regularize_mass_matrix(M, ctrl);
     info = compute_runtime_info(t, q, dq, tau, M, rhs, M_solve);
 
@@ -250,7 +279,7 @@ function tau = limit_tau(tau, tau_limit)
     tau = max(min(tau(:), tau_limit(:)), -tau_limit(:));
 end
 
-% 靠近关节上下限时增加反向保护力矩，把关节从限位附近推回安全区。
+% 稳定措施说明：靠近关节上下限时增加反向保护力矩，把关节从限位附近推回安全区。
 function tau_guard = joint_limit_guard(q, dq, ctrl)
     tau_guard = zeros(7, 1);
 
@@ -279,7 +308,7 @@ function tau_guard = joint_limit_guard(q, dq, ctrl)
     end
 end
 
-% 在质量矩阵对角线上加入等效电机惯量，抑制小特征值造成的加速度放大。
+% 稳定措施说明：在质量矩阵对角线上加入等效电机惯量，抑制小特征值造成的加速度放大。
 function M_solve = regularize_mass_matrix(M, ctrl)
     M_solve = 0.5 * (M + M.') + diag(ctrl.motor_inertia);
 end
@@ -287,15 +316,19 @@ end
 function [tau, parts] = stable_controller(t, q, dq, inertial_hat, ctrl)
     [tau_full, parts] = robust_pd_smc_controller(t, q, dq, inertial_hat, ctrl);
 
-    % 反馈软启动，只渐进加入 PD 和滑模项，前馈项保持完整。
-    feedback_scale = min(max(t / ctrl.feedback_ramp_time, 0), 1);
+    % 稳定措施说明：反馈软启动，只渐进加入 PD 和滑模项，前馈项保持完整。
+    if ctrl.feedback_ramp_time > 0
+        feedback_scale = min(max(t / ctrl.feedback_ramp_time, 0), 1);
+    else
+        feedback_scale = 1;
+    end
 
     parts.tau_pd_raw = parts.tau_pd;
     parts.tau_smc_raw = parts.tau_smc;
     parts.tau_pd = feedback_scale * parts.tau_pd_raw;
     parts.tau_smc = feedback_scale * parts.tau_smc_raw;
 
-    % 总控制力矩中叠加关节限位软保护项，再交给力矩限幅处理。
+    % 稳定措施说明：总控制力矩中叠加关节限位软保护项，再交给力矩限幅处理。
     parts.tau_limit_guard = joint_limit_guard(q(:), dq(:), ctrl);
     tau = parts.tau_ff + parts.tau_pd + parts.tau_smc + parts.tau_limit_guard;
     parts.feedback_scale = feedback_scale;
@@ -303,6 +336,10 @@ function [tau, parts] = stable_controller(t, q, dq, inertial_hat, ctrl)
 end
 
 function info = compute_runtime_info(t, q, dq, tau, M, rhs, M_solve)
+    if nargin < 7
+        M_solve = M;
+    end
+
     M_sym = 0.5 * (M + M.');
     M_solve_sym = 0.5 * (M_solve + M_solve.');
     ddq_raw = M \ rhs;
@@ -316,6 +353,7 @@ function info = compute_runtime_info(t, q, dq, tau, M, rhs, M_solve)
     info.norm_ddq_raw = norm(ddq_raw);
     info.norm_ddq = norm(ddq);
     info.max_abs_tau = max(abs(tau));
+    info.max_abs_rhs = max(abs(rhs));
     info.max_abs_ddq_raw = max(abs(ddq_raw));
     info.max_abs_ddq = max(abs(ddq));
     info.rcond_M = rcond(M_sym);
@@ -359,6 +397,7 @@ function report_runtime_state(t, x, inertial_true, inertial_hat, ctrl)
     fprintf('  max |tau raw / limited| = %.6e / %.6e\n', max(abs(tau_raw)), info.max_abs_tau);
     fprintf('  norm(tau_limit_guard) = %.6e, joint2 guard = %.6e\n', ...
         norm(parts.tau_limit_guard), parts.tau_limit_guard(2));
+    fprintf('  norm(rhs)  = %.6e\n', info.norm_rhs);
     fprintf('  norm(ddq raw / solve) = %.6e / %.6e\n', info.norm_ddq_raw, info.norm_ddq);
     fprintf('  max |ddq raw / solve| = %.6e / %.6e\n', info.max_abs_ddq_raw, info.max_abs_ddq);
     fprintf('  rcond(M)   = %.6e\n', info.rcond_M);
@@ -367,8 +406,7 @@ function report_runtime_state(t, x, inertial_true, inertial_hat, ctrl)
     fprintf('  minEig(M+Jm)= %.6e\n', info.min_eig_M_solve);
 end
 
-function plot_tracking_result(t, q, dq, q_ref, dq_ref, tau, ...
-        tau_ff, tau_pd, tau_smc, tau_guard, err_norm)
+function plot_tracking_result(t, q, dq, q_ref, dq_ref, tau, tau_ff, tau_pd, tau_smc, err_norm)
     figure('Name', '参数不准确情况下的鲁棒跟踪效果', 'Color', 'w');
 
     subplot(4, 1, 1);
@@ -399,35 +437,30 @@ function plot_tracking_result(t, q, dq, q_ref, dq_ref, tau, ...
     title('误差范数');
 
     figure('Name', '控制力矩组成', 'Color', 'w');
-    subplot(5, 1, 1);
+    subplot(4, 1, 1);
     plot(t, tau, 'LineWidth', 1.1);
     grid on;
     ylabel('总力矩 tau');
     title('总控制力矩');
 
-    subplot(5, 1, 2);
+    subplot(4, 1, 2);
     plot(t, tau_ff, 'LineWidth', 1.1);
     grid on;
     ylabel('前馈力矩 tau_{ff}');
     title('名义模型前馈力矩');
 
-    subplot(5, 1, 3);
+    subplot(4, 1, 3);
     plot(t, tau_pd, 'LineWidth', 1.1);
     grid on;
     ylabel('PD力矩 tau_{pd}');
     title('PD反馈力矩');
 
-    subplot(5, 1, 4);
+    subplot(4, 1, 4);
     plot(t, tau_smc, 'LineWidth', 1.1);
     grid on;
+    xlabel('时间 t / s');
     ylabel('鲁棒力矩 tau_{smc}');
     title('滑模鲁棒力矩');
 
-    subplot(5, 1, 5);
-    plot(t, tau_guard, 'LineWidth', 1.1);
-    grid on;
-    xlabel('时间 t / s');
-    ylabel('限位保护 tau_{guard}');
-    title('关节限位软保护力矩');
+    legend;
 end
-
