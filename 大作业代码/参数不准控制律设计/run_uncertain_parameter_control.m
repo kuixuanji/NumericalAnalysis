@@ -39,28 +39,26 @@ ctrl.q_limit_margin = 0.35;
 ctrl.q_limit_Kp = [0; 30; 0; 15; 0; 8; 0];
 ctrl.q_limit_Kd = [0; 8; 0; 4; 0; 2; 0];
 
-sim.T = 16.0;
+sim.T = 8.0;
 sim.dt = 0.001;
 sim.tspan = 0:sim.dt:sim.T;
 
 [q_ref0, dq_ref0] = desired_joint_trajectory(0);
 
-% 使用调参后的小初始偏差，避免仿真起步阶段直接进入大超调。
+% 故意让初始关节角和期望值有偏差，这样一开始就能看到控制器如何把误差压下去。
 q0 = q_ref0 + [0.0200; -0.0150; 0.0125; -0.0125; 0.0100; -0.0075; 0.0050];
 dq0 = dq_ref0 + zeros(7, 1);
 x0 = [q0; dq0];
 
-fprintf('名义模型使用的参数扰动比例：\n');
-disp(uncertainty_info);
 fprintf('前向动力学求解加入等效电机惯量：diag(Jm)=%.3f kg*m^2\n', ctrl.motor_inertia(1));
-fprintf('半隐式 Euler 步长：%.4f s\n', sim.dt);
+fprintf('四阶 Runge-Kutta 步长：%.4f s\n', sim.dt);
 
 ode_rhs = @(t, x) closed_loop_rhs(t, x, inertial_true, inertial_hat, ctrl);
-[t, x, stop_info] = semi_implicit_euler_integrate( ...
+[t, x, stop_info] = runge_kutta4_integrate( ...
     ode_rhs, sim.tspan, x0, inertial_true, inertial_hat, ctrl);
 
 if stop_info.stopped
-    fprintf('\n半隐式 Euler 仿真提前终止：t = %.6f s\n', stop_info.t);
+    fprintf('\n四阶 Runge-Kutta 仿真提前终止：t = %.6f s\n', stop_info.t);
     fprintf('终止原因：%s\n', stop_info.reason);
     report_runtime_state(stop_info.t, stop_info.x, inertial_true, inertial_hat, ctrl);
 end
@@ -129,7 +127,7 @@ function dx = closed_loop_rhs(t, x, inertial_true, inertial_hat, ctrl)
     dx = [dq; ddq];
 end
 
-function [t_out, x_out, stop_info] = semi_implicit_euler_integrate( ...
+function [t_out, x_out, stop_info] = runge_kutta4_integrate( ...
         ode_rhs, tspan, x0, inertial_true, inertial_hat, ctrl)
     n_step = numel(tspan);
     x_all = zeros(n_step, numel(x0));
@@ -140,7 +138,7 @@ function [t_out, x_out, stop_info] = semi_implicit_euler_integrate( ...
     stop_info.x = x0(:);
     stop_info.reason = '';
 
-    fprintf('\n开始半隐式 Euler 积分，共 %d 步。\n', n_step - 1);
+    fprintf('\n开始四阶 Runge-Kutta 积分，共 %d 步。\n', n_step - 1);
     report_runtime_state(tspan(1), x0(:), inertial_true, inertial_hat, ctrl);
 
     for k = 1:n_step - 1
@@ -149,7 +147,10 @@ function [t_out, x_out, stop_info] = semi_implicit_euler_integrate( ...
         xk = x_all(k, :).';
 
         try
-            dx = ode_rhs(t, xk);
+            k1 = ode_rhs(t, xk);
+            k2 = ode_rhs(t + 0.5 * h, xk + 0.5 * h * k1);
+            k3 = ode_rhs(t + 0.5 * h, xk + 0.5 * h * k2);
+            k4 = ode_rhs(t + h, xk + h * k3);
         catch ME
             stop_info.stopped = true;
             stop_info.t = t;
@@ -160,20 +161,18 @@ function [t_out, x_out, stop_info] = semi_implicit_euler_integrate( ...
             return;
         end
 
-        if any(~isfinite(dx))
+        if any(~isfinite(k1)) || any(~isfinite(k2)) || ...
+                any(~isfinite(k3)) || any(~isfinite(k4))
             stop_info.stopped = true;
             stop_info.t = t;
             stop_info.x = xk;
-            stop_info.reason = 'dx 中存在 NaN 或 Inf。';
+            stop_info.reason = 'Runge-Kutta 子步导数中存在 NaN 或 Inf。';
             t_out = tspan(1:k).';
             x_out = x_all(1:k, :);
             return;
         end
 
-        % 使用半隐式 Euler，先更新速度再更新位置，降低显式 Euler 的能量放大。
-        q_next = xk(1:7) + h * (xk(8:14) + h * dx(8:14));
-        dq_next = xk(8:14) + h * dx(8:14);
-        x_next = [q_next; dq_next];
+        x_next = xk + h / 6 * (k1 + 2 * k2 + 2 * k3 + k4);
         x_all(k + 1, :) = x_next.';
 
         [is_bad, reason] = is_bad_state(tspan(k + 1), x_next, ...
@@ -190,7 +189,7 @@ function [t_out, x_out, stop_info] = semi_implicit_euler_integrate( ...
 
         if mod(k, 1000) == 0 || k == n_step - 1
             fprintf('  step %4d/%4d, t = %.3f s\n', k, n_step - 1, t);
-            report_runtime_state(t, xk, inertial_true, inertial_hat, ctrl);
+            %report_runtime_state(t, xk, inertial_true, inertial_hat, ctrl);
         end
     end
 
@@ -399,35 +398,28 @@ function plot_tracking_result(t, q, dq, q_ref, dq_ref, tau, ...
     title('误差范数');
 
     figure('Name', '控制力矩组成', 'Color', 'w');
-    subplot(5, 1, 1);
+    subplot(4, 1, 1);
     plot(t, tau, 'LineWidth', 1.1);
     grid on;
     ylabel('总力矩 tau');
     title('总控制力矩');
 
-    subplot(5, 1, 2);
+    subplot(4, 1, 2);
     plot(t, tau_ff, 'LineWidth', 1.1);
     grid on;
     ylabel('前馈力矩 tau_{ff}');
     title('名义模型前馈力矩');
 
-    subplot(5, 1, 3);
+    subplot(4, 1, 3);
     plot(t, tau_pd, 'LineWidth', 1.1);
     grid on;
     ylabel('PD力矩 tau_{pd}');
     title('PD反馈力矩');
 
-    subplot(5, 1, 4);
+    subplot(4, 1, 4);
     plot(t, tau_smc, 'LineWidth', 1.1);
     grid on;
     ylabel('鲁棒力矩 tau_{smc}');
     title('滑模鲁棒力矩');
 
-    subplot(5, 1, 5);
-    plot(t, tau_guard, 'LineWidth', 1.1);
-    grid on;
-    xlabel('时间 t / s');
-    ylabel('限位保护 tau_{guard}');
-    title('关节限位软保护力矩');
 end
-

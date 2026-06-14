@@ -1,8 +1,3 @@
-%% 参数不准确情况下的鲁棒轨迹跟踪控制：稳定演示版
-% 本脚本复用原大作业中的七自由度机械臂模型和惯性参数。
-% 被控对象使用真实参数进行仿真，控制器前馈项故意使用扰动后的
-% 质量、质心和惯性张量参数。本模型不计摩擦。
-% 演示版保留调参过程中验证有效的稳定措施，用于展示参数不准时的轨迹跟踪效果。
 clear; clc; close all;
 
 this_dir = fileparts(mfilename('fullpath'));
@@ -21,7 +16,7 @@ test.use_true_feedforward = false;
 test.gain_scale = 0.10;
 
 % 稳定措施说明：缩小初始位置偏差，避免仿真起步阶段直接撞入大超调。
-test.initial_error_scale = 0.25;
+test.initial_error_scale = 1;
 
 % 稳定措施说明：反馈项软启动，前 0.5 秒逐渐打开 PD 和滑模反馈，减少起步冲击。
 test.feedback_ramp_time = 0.5;
@@ -68,6 +63,7 @@ sim.T = 8.0;
 sim.dt = 0.001;
 sim.tspan = 0:sim.dt:sim.T;
 
+% 故意让初始关节角和期望值有偏差，这样一开始就能看到控制器如何把误差压下去。
 [q_ref0, dq_ref0] = desired_joint_trajectory(0);
 q0 = q_ref0 + test.initial_error_scale * ...
     [0.08; -0.06; 0.05; -0.05; 0.04; -0.03; 0.02];
